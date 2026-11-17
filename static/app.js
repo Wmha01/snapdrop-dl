@@ -33,13 +33,26 @@ btnInstalar.addEventListener('click', async () => {
 
 const form = document.getElementById('form-ajax');
 const input = document.getElementById('input-enlace');
+const btnClearInput = document.getElementById('btn-clear-input');
 const btnGenerar = document.getElementById('btn-generar');
 const contenedorResultado = document.getElementById('resultado-dinamico');
 const pCont = document.getElementById('p-cont');
 const pBar = document.getElementById('p-bar');
 const status = document.getElementById('status-text');
 
-input.addEventListener('input', () => { btnGenerar.disabled = !input.value.trim().startsWith('http'); });
+function actualizarEstadoInput() {
+    const valor = input.value.trim();
+    btnGenerar.disabled = !valor.startsWith('http');
+    btnClearInput.style.display = valor.length > 0 ? 'block' : 'none';
+}
+
+input.addEventListener('input', actualizarEstadoInput);
+
+btnClearInput.addEventListener('click', () => {
+    input.value = '';
+    actualizarEstadoInput();
+    input.focus();
+});
 
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -48,47 +61,82 @@ form.addEventListener('submit', async (e) => {
     
     pCont.style.display = 'block';
     status.style.display = 'block';
-    pBar.style.width = '5%';
-    status.innerText = 'Buscando medio... 5%';
+    pBar.style.width = '10%';
+    status.innerText = 'Conectando y desbloqueando enlace...';
 
     const eventSource = new EventSource('/progreso');
     eventSource.onmessage = (event) => {
         const data = JSON.parse(event.data);
         pBar.style.width = data.porcentaje + '%';
-        status.innerText = `Procesando... ${Math.round(data.porcentaje)}%`;
+        status.innerText = `Procesando medio... ${Math.round(data.porcentaje)}%`;
         if(data.porcentaje >= 100) eventSource.close();
     };
+    eventSource.onerror = () => eventSource.close();
 
     const formData = new FormData(form);
     try {
         const response = await fetch('/procesar', { method: 'POST', body: formData });
         const data = await response.json();
         
+        eventSource.close();
         pCont.style.display = 'none';
         status.style.display = 'none';
         btnGenerar.style.display = 'block';
         contenedorResultado.style.display = 'block';
 
         if (data.status === 'success') {
+            const urlCompletaDescarga = window.location.origin + data.url_descarga;
+            const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(urlCompletaDescarga)}`;
+
             contenedorResultado.innerHTML = `
                 <div class="resultado-card">
-                    <p style="margin-top:0; font-weight: 600; color: var(--text-main);">✨ ¡Listo!</p>
-                    <a href="${data.url_descarga}" class="btn-descarga">Descargar Ahora</a>
+                    <p style="margin:0; font-weight: 600; color: var(--text-main); font-size: 14px;">${data.titulo}</p>
+                    <p class="meta-info">👤 ${data.autor} • 📦 Formato ${data.ext.toUpperCase()}</p>
                     <img src="${data.miniatura}" class="miniatura" onerror="this.style.display='none'">
+                    <a href="${data.url_descarga}" class="btn-descarga">⬇️ Descargar Ahora</a>
+                    
+                    <div class="acciones-extra">
+                        <button type="button" class="btn-secundario" onclick="toggleQR()">📱 Pasar al Celular (QR)</button>
+                        <button type="button" class="btn-secundario" onclick="compartirEnlace('${urlCompletaDescarga}', '${data.titulo.replace(/'/g, "")}')">🔗 Compartir</button>
+                    </div>
+
+                    <div id="qr-box" class="qr-box">
+                        <img src="${qrApiUrl}" alt="Código QR de descarga">
+                        <p>Escanea con tu cámara para descargar en el móvil</p>
+                    </div>
                 </div>`;
             guardarHistorial(data.titulo);
-            mostrarToast('Medio procesado correctamente.'); 
+            mostrarToast('¡Listo para descargar!'); 
         } else {
             contenedorResultado.innerHTML = `<div class="resultado-card" style="border-color: var(--danger); color: var(--danger);">⚠️ ${data.message}</div>`;
             mostrarToast(data.message, true); 
         }
     } catch (error) { 
+        eventSource.close();
         pCont.style.display = 'none';
         status.style.display = 'none';
         btnGenerar.style.display = 'block';
         mostrarToast('Error de conexión con el servidor.', true); 
     }
 });
+
+function toggleQR() {
+    const box = document.getElementById('qr-box');
+    if (box) {
+        box.style.display = box.style.display === 'block' ? 'none' : 'block';
+    }
+}
+
+async function compartirEnlace(url, titulo) {
+    if (navigator.share) {
+        try {
+            await navigator.share({ title: titulo, text: 'Descargado con SnapDrop:', url: url });
+        } catch (err) {}
+    } else {
+        await navigator.clipboard.writeText(url);
+        mostrarToast('Enlace de descarga copiado al portapapeles');
+    }
+}
 
 function guardarHistorial(titulo) {
     let hist = JSON.parse(localStorage.getItem('pdp_historial') || '[]');
@@ -107,10 +155,10 @@ function renderHistorial() {
 document.getElementById('btn-pegar').onclick = async () => { 
     try { 
         input.value = await navigator.clipboard.readText(); 
-        btnGenerar.disabled = !input.value.trim().startsWith('http');
+        actualizarEstadoInput();
         if(input.value) mostrarToast('Enlace pegado del portapapeles');
     } catch(e) {
-        mostrarToast('No se pudo acceder al portapapeles', true);
+        mostrarToast('Permiso de portapapeles denegado', true);
     } 
 };
 
