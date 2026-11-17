@@ -2,12 +2,9 @@ function mostrarToast(mensaje, esError = false) {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
     toast.className = `toast ${esError ? 'error' : ''}`;
-    toast.innerHTML = `<span style="font-size: 18px;">${esError ? '⚠️' : '✨'}</span> ${mensaje}`;
+    toast.innerHTML = `<span>${esError ? '⚠️' : '✨'}</span> ${mensaje}`;
     container.appendChild(toast);
-    
-    setTimeout(() => {
-        if(container.contains(toast)) { toast.remove(); }
-    }, 3900);
+    setTimeout(() => { if (container.contains(toast)) toast.remove(); }, 3600);
 }
 
 let promptDiferido;
@@ -23,10 +20,7 @@ btnInstalar.addEventListener('click', async () => {
     if (promptDiferido) {
         promptDiferido.prompt();
         const { outcome } = await promptDiferido.userChoice;
-        if (outcome === 'accepted') {
-            btnInstalar.style.display = 'none';
-            mostrarToast('¡Gracias por instalar SnapDrop!');
-        }
+        if (outcome === 'accepted') btnInstalar.style.display = 'none';
         promptDiferido = null;
     }
 });
@@ -36,9 +30,9 @@ const input = document.getElementById('input-enlace');
 const btnClearInput = document.getElementById('btn-clear-input');
 const btnGenerar = document.getElementById('btn-generar');
 const contenedorResultado = document.getElementById('resultado-dinamico');
-const pCont = document.getElementById('p-cont');
-const pBar = document.getElementById('p-bar');
-const status = document.getElementById('status-text');
+const loaderBox = document.getElementById('loader-box');
+
+let datosActuales = null;
 
 function actualizarEstadoInput() {
     const valor = input.value.trim();
@@ -51,91 +45,81 @@ input.addEventListener('input', actualizarEstadoInput);
 btnClearInput.addEventListener('click', () => {
     input.value = '';
     actualizarEstadoInput();
+    contenedorResultado.style.display = 'none';
     input.focus();
 });
 
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    btnGenerar.style.display = 'none';
+    btnGenerar.disabled = true;
     contenedorResultado.style.display = 'none';
-    
-    pCont.style.display = 'block';
-    status.style.display = 'block';
-    pBar.style.width = '10%';
-    status.innerText = 'Conectando y desbloqueando enlace...';
-
-    const eventSource = new EventSource('/progreso');
-    eventSource.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        pBar.style.width = data.porcentaje + '%';
-        status.innerText = `Procesando medio... ${Math.round(data.porcentaje)}%`;
-        if(data.porcentaje >= 100) eventSource.close();
-    };
-    eventSource.onerror = () => eventSource.close();
+    loaderBox.style.display = 'block';
 
     const formData = new FormData(form);
     try {
-        const response = await fetch('/procesar', { method: 'POST', body: formData });
+        const response = await fetch('/analizar', { method: 'POST', body: formData });
         const data = await response.json();
         
-        eventSource.close();
-        pCont.style.display = 'none';
-        status.style.display = 'none';
-        btnGenerar.style.display = 'block';
+        loaderBox.style.display = 'none';
+        btnGenerar.disabled = false;
         contenedorResultado.style.display = 'block';
 
         if (data.status === 'success') {
-            const urlCompletaDescarga = window.location.origin + data.url_descarga;
-            const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(urlCompletaDescarga)}`;
+            datosActuales = data;
+            const etiquetaTipo = data.tipo === 'imagen' ? '📸 Imagen Detectada' : '🎬 Video Detectado';
+            
+            let opcionesHTML = '';
+            data.formatos.forEach((f, idx) => {
+                opcionesHTML += `<option value="${idx}">${f.etiqueta}</option>`;
+            });
 
             contenedorResultado.innerHTML = `
                 <div class="resultado-card">
-                    <p style="margin:0; font-weight: 600; color: var(--text-main); font-size: 14px;">${data.titulo}</p>
-                    <p class="meta-info">👤 ${data.autor} • 📦 Formato ${data.ext.toUpperCase()}</p>
-                    <img src="${data.miniatura}" class="miniatura" onerror="this.style.display='none'">
-                    <a href="${data.url_descarga}" class="btn-descarga">⬇️ Descargar Ahora</a>
+                    <span class="badge-tipo">${etiquetaTipo}</span>
+                    <p class="titulo-media">${data.titulo}</p>
+                    <p class="meta-info">Por ${data.autor}</p>
+                    ${data.miniatura ? `<img src="${data.miniatura}" class="miniatura" onerror="this.style.display='none'">` : ''}
                     
-                    <div class="acciones-extra">
-                        <button type="button" class="btn-secundario" onclick="toggleQR()">📱 Pasar al Celular (QR)</button>
-                        <button type="button" class="btn-secundario" onclick="compartirEnlace('${urlCompletaDescarga}', '${data.titulo.replace(/'/g, "")}')">🔗 Compartir</button>
-                    </div>
+                    <label class="selector-label">Elige formato y resolución:</label>
+                    <select id="select-formato-dinamico" class="select-resolucion">
+                        ${opcionesHTML}
+                    </select>
 
-                    <div id="qr-box" class="qr-box">
-                        <img src="${qrApiUrl}" alt="Código QR de descarga">
-                        <p>Escanea con tu cámara para descargar en el móvil</p>
-                    </div>
+                    <button type="button" id="btn-ejecutar-descarga" class="btn-descarga">Descargar Archivo</button>
                 </div>`;
+
+            document.getElementById('btn-ejecutar-descarga').onclick = iniciarDescargaSeleccionada;
             guardarHistorial(data.titulo);
-            mostrarToast('¡Listo para descargar!'); 
         } else {
-            contenedorResultado.innerHTML = `<div class="resultado-card" style="border-color: var(--danger); color: var(--danger);">⚠️ ${data.message}</div>`;
-            mostrarToast(data.message, true); 
+            contenedorResultado.innerHTML = `
+                <div class="resultado-card" style="border-color: var(--danger); color: var(--danger); text-align: center;">
+                    ⚠️ ${data.message}
+                </div>`;
+            mostrarToast(data.message, true);
         }
-    } catch (error) { 
-        eventSource.close();
-        pCont.style.display = 'none';
-        status.style.display = 'none';
-        btnGenerar.style.display = 'block';
-        mostrarToast('Error de conexión con el servidor.', true); 
+    } catch (error) {
+        loaderBox.style.display = 'none';
+        btnGenerar.disabled = false;
+        mostrarToast('Error de conexión con el servidor.', true);
     }
 });
 
-function toggleQR() {
-    const box = document.getElementById('qr-box');
-    if (box) {
-        box.style.display = box.style.display === 'block' ? 'none' : 'block';
-    }
-}
+function iniciarDescargaSeleccionada() {
+    if (!datosActuales) return;
+    const idx = document.getElementById('select-formato-dinamico').value;
+    const formatoElegido = datosActuales.formatos[idx];
 
-async function compartirEnlace(url, titulo) {
-    if (navigator.share) {
-        try {
-            await navigator.share({ title: titulo, text: 'Descargado con SnapDrop:', url: url });
-        } catch (err) {}
-    } else {
-        await navigator.clipboard.writeText(url);
-        mostrarToast('Enlace de descarga copiado al portapapeles');
-    }
+    const params = new URLSearchParams({
+        url: datosActuales.url_origen,
+        directa: formatoElegido.url_directa || '',
+        titulo: datosActuales.titulo,
+        ext: formatoElegido.ext,
+        modo: formatoElegido.modo,
+        res: formatoElegido.id
+    });
+
+    mostrarToast('Iniciando descarga...');
+    window.location.href = `/descargar?${params.toString()}`;
 }
 
 function guardarHistorial(titulo) {
@@ -148,7 +132,7 @@ function guardarHistorial(titulo) {
 function renderHistorial() {
     const lista = document.getElementById('lista-historial');
     const data = JSON.parse(localStorage.getItem('pdp_historial') || '[]');
-    lista.innerHTML = data.length ? '' : '<li style="text-align:center; color:var(--text-secondary); font-size:13px; padding: 15px 0;">No hay descargas recientes</li>';
+    lista.innerHTML = data.length ? '' : '<li style="text-align:center; color:var(--text-secondary); font-size:12px; padding: 12px 0;">No hay descargas recientes</li>';
     data.forEach(i => { lista.innerHTML += `<li class="historial-item"><span>${i.titulo}</span><small>${i.fecha}</small></li>`; });
 }
 
@@ -156,7 +140,6 @@ document.getElementById('btn-pegar').onclick = async () => {
     try { 
         input.value = await navigator.clipboard.readText(); 
         actualizarEstadoInput();
-        if(input.value) mostrarToast('Enlace pegado del portapapeles');
     } catch(e) {
         mostrarToast('Permiso de portapapeles denegado', true);
     } 
@@ -174,5 +157,4 @@ function toggleDarkMode() {
 }
 
 if(localStorage.getItem('pdp_theme') === 'dark') document.body.classList.add('dark-mode');
-
 renderHistorial();
